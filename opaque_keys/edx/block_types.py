@@ -6,6 +6,7 @@ that encodes the block_family as well. It isn't intended for use in XBlock
 ScopeIds (that block type should be a simple string, since all uses of
 ScopeIds have a class associated with them).
 """
+from hypothesis import strategies
 from opaque_keys.edx.keys import BlockTypeKey
 from opaque_keys import InvalidKeyError
 
@@ -34,6 +35,19 @@ class BlockTypeKeyV1(BlockTypeKey):  # pylint: disable=abstract-method
             block_family=block_family,
             block_type=block_type,
             deprecated=block_family == XBLOCK_V1,
+        )
+
+    @classmethod
+    def key_strategy(cls):
+        return strategies.builds(
+            cls,
+            block_family=(
+                strategies.text(
+                    alphabet=strategies.characters(blacklist_characters=':'),
+                    min_size=1,
+                ) | strategies.sampled_from((XBLOCK_V1, XMODULE_V1))
+            ),
+            block_type=strategies.text(min_size=1),
         )
 
     @classmethod

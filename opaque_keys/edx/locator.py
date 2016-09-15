@@ -9,12 +9,14 @@ import logging
 import re
 import warnings
 from abc import abstractproperty
-from six import string_types, text_type
+import string
 
 from bson.errors import InvalidId
 from bson.objectid import ObjectId
 from bson.son import SON
+from hypothesis import strategies
 
+from six import string_types, text_type
 from opaque_keys import OpaqueKey, InvalidKeyError
 from opaque_keys.edx.keys import CourseKey, UsageKey, DefinitionKey, AssetKey
 
@@ -86,7 +88,20 @@ class BlockLocatorBase(Locator):
     BLOCK_ALLOWED_ID_CHARS = r'[\w\-~.:%]'
 
     ALLOWED_ID_RE = re.compile(r'^' + Locator.ALLOWED_ID_CHARS + '+$', re.UNICODE)
+    ALLOWED_ID_STRATEGY = strategies.text(
+        alphabet=strategies.characters(
+            whitelist_categories=['Lu', 'Ll', 'Lt', 'Lm', 'Lo', 'Nd', 'No']
+        ) | strategies.sampled_from("-~.:"),
+        min_size=1,
+    )
+
     DEPRECATED_ALLOWED_ID_RE = re.compile(r'^' + Locator.DEPRECATED_ALLOWED_ID_CHARS + '+$', re.UNICODE)
+    DEPRECATED_ALLOWED_ID_STRATEGY = strategies.text(
+        alphabet=strategies.characters(
+            whitelist_categories=['Lu', 'Ll', 'Lt', 'Lm', 'Lo', 'Nd', 'No']
+        ) | strategies.sampled_from("-~.:%"),
+        min_size=1,
+    )
 
     # pep8 and pylint don't agree on the indentation in this block; let's make
     # pep8 happy and ignore pylint as that's easier to do.
@@ -110,7 +125,7 @@ class BlockLocatorBase(Locator):
     URL_RE = re.compile('^' + URL_RE_SOURCE + r'\Z', re.IGNORECASE | re.VERBOSE | re.UNICODE)
 
     @classmethod
-    def parse_url(cls, string):
+    def parse_url(cls, string):  # pylint: disable=redefined-outer-name
         """
         If it can be parsed as a version_guid with no preceding org + offering, returns a dict
         with key 'version_guid' and the value,
@@ -153,6 +168,13 @@ class CourseLocator(BlockLocatorBase, CourseKey):   # pylint: disable=abstract-m
 
     # Characters that are forbidden in the deprecated format
     INVALID_CHARS_DEPRECATED = re.compile(r"[^\w.%-]", re.UNICODE)
+
+    NOT_INVALID_CHARS_STRATEGY = strategies.text(
+        alphabet=strategies.characters(
+            whitelist_categories=['Lu', 'Ll', 'Lt', 'Lm', 'Lo', 'Nd', 'No']
+        ) | strategies.sampled_from("-.%"),
+        min_size=1,
+    )
 
     def __init__(self, org=None, course=None, run=None, branch=None, version_guid=None, deprecated=False, **kwargs):
         """
@@ -210,6 +232,37 @@ class CourseLocator(BlockLocatorBase, CourseKey):   # pylint: disable=abstract-m
         if not self.deprecated and self.version_guid is None and \
                 (self.org is None or self.course is None or self.run is None):
             raise InvalidKeyError(self.__class__, "Either version_guid or org, course, and run should be set")
+
+    @classmethod
+    def key_strategy(cls):
+        # composite can't handle descriptor objects (like the results of classmethod),
+        # so we use a nested function instead
+        @strategies.composite
+        def strategy(draw):
+            """
+            Hypothesis strategy to create a CourseLocator.
+            """
+            deprecated = draw(strategies.booleans())
+            if deprecated:
+                return draw(strategies.builds(
+                    cls,
+                    org=cls.NOT_INVALID_CHARS_STRATEGY,
+                    course=cls.NOT_INVALID_CHARS_STRATEGY,
+                    run=cls.NOT_INVALID_CHARS_STRATEGY,
+                    branch=cls.DEPRECATED_ALLOWED_ID_STRATEGY | strategies.none(),
+                    deprecated=strategies.just(True),
+                ))
+            else:
+                return draw(strategies.builds(
+                    cls,
+                    org=cls.ALLOWED_ID_STRATEGY,
+                    course=cls.ALLOWED_ID_STRATEGY,
+                    run=cls.ALLOWED_ID_STRATEGY,
+                    branch=cls.ALLOWED_ID_STRATEGY,
+                    version_guid=strategies.text(alphabet=string.hexdigits, min_size=24, max_size=24),
+                    deprecated=strategies.just(False),
+                ))
+        return strategy()  # pylint: disable=no-value-for-parameter
 
     @classmethod
     def _check_location_part(cls, val, regexp):  # pylint: disable=missing-docstring
@@ -461,6 +514,17 @@ class LibraryLocator(BlockLocatorBase, CourseKey):
         if self.version_guid is None and (self.org is None or self.library is None):  # pylint: disable=no-member
             raise InvalidKeyError(self.__class__, "Either version_guid or org and library should be set")
 
+    @classmethod
+    def field_strategy(cls, field):
+        if field == 'version_guid':
+            return strategies.text(alphabet=string.hexdigits, min_size=24, max_size=24)
+        elif field in ('org', 'library', 'branch'):
+            return cls.ALLOWED_ID_STRATEGY
+        elif field == 'deprecated':
+            return strategies.just(False)
+        else:
+            return super(LibraryLocator, cls).field_strategy(field)
+
     @property
     def run(self):
         """
@@ -647,6 +711,34 @@ class BlockUsageLocator(BlockLocatorBase, UsageKey):
 
         super(BlockUsageLocator, self).__init__(course_key=course_key, block_type=block_type, block_id=block_id,
                                                 **kwargs)
+
+    @classmethod
+    def key_strategy(cls):
+        # composite can't handle descriptor objects (like the results of classmethod),
+        # so we use a nested function instead
+        @strategies.composite
+        def strategy(draw):
+            """
+            A strategy for creating BlockUsageLocators
+            """
+            course_key = draw(CourseLocator.key_strategy())
+            if course_key.deprecated:
+                return draw(strategies.builds(
+                    cls,
+                    course_key=strategies.just(course_key),
+                    block_id=cls.DEPRECATED_ALLOWED_ID_STRATEGY,
+                    block_type=strategies.text(),
+                    deprecated=strategies.booleans(),
+                ))
+            else:
+                return draw(strategies.builds(
+                    cls,
+                    course_key=strategies.just(course_key),
+                    block_id=cls.ALLOWED_ID_STRATEGY,
+                    block_type=strategies.text(),
+                    deprecated=strategies.booleans(),
+                ))
+        return strategy()  # pylint: disable=no-value-for-parameter
 
     def replace(self, **kwargs):
         # BlockUsageLocator allows for the replacement of 'KEY_FIELDS' in 'self.course_key'.
@@ -1062,6 +1154,15 @@ class LibraryUsageLocator(BlockUsageLocator):
         super(BlockUsageLocator, self).__init__(library_key=library_key, block_type=block_type, block_id=block_id,
                                                 **kwargs)
 
+    @classmethod
+    def key_strategy(cls):
+        return strategies.builds(
+            cls,
+            library_key=LibraryLocator.key_strategy(),
+            block_id=cls.ALLOWED_ID_STRATEGY,
+            block_type=cls.ALLOWED_ID_STRATEGY,
+        )
+
     def replace(self, **kwargs):
         # BlockUsageLocator allows for the replacement of 'KEY_FIELDS' in 'self.library_key'
         lib_key_kwargs = {}
@@ -1168,6 +1269,13 @@ class DefinitionLocator(Locator, DefinitionKey):
             except ValueError:
                 raise InvalidKeyError(DefinitionLocator, definition_id)
         super(DefinitionLocator, self).__init__(definition_id=definition_id, block_type=block_type, deprecated=False)
+
+    @classmethod
+    def field_strategy(cls, field):
+        if field == 'definition_id':
+            return strategies.text(alphabet=string.hexdigits, min_size=24, max_size=24)
+        else:
+            return super(DefinitionLocator, cls).field_strategy(field)
 
     def _to_string(self):
         """

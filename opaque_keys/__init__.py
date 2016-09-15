@@ -18,6 +18,7 @@ from six import (
     viewitems,
     with_metaclass,
 )
+from hypothesis import strategies
 from stevedore.enabled import EnabledExtensionManager
 
 
@@ -328,6 +329,47 @@ class OpaqueKey(with_metaclass(OpaqueKeyMetaclass)):
 
         existing_values.update(kwargs)
         return type(self)(**existing_values)
+
+    @classmethod
+    def field_strategy(cls, field):
+        """
+        A strategy to generate data of the right type for the fields of this OpaqueKey.
+
+        Arguments:
+            field: The name of the field to generate data for.
+        """
+        if field == 'deprecated':
+            return strategies.booleans()
+        else:
+            return strategies.text(min_size=1)
+
+    @classmethod
+    def key_strategy(cls):
+        """
+        A strategy to generate instances of this OpaqueKey class.
+        """
+        key_fields = {
+            field: cls.field_strategy(field)
+            for field in cls.KEY_FIELDS
+        }
+        return strategies.builds(
+            cls,
+            deprecated=cls.field_strategy('deprecated'),
+            **key_fields
+        )
+
+    @classmethod
+    def type_strategy(cls, blacklist=None):
+        """
+        A strategy to generate instances of this OpaqueKey KeyType.
+        """
+        if blacklist is None:
+            blacklist = ()
+        return strategies.one_of(*[
+            extension.plugin.key_strategy()
+            for extension in cls._drivers()
+            if not(issubclass(extension.plugin, blacklist))
+        ])
 
     def __setattr__(self, name, value):
         if getattr(self, '_initialized', False):

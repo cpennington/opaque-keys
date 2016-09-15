@@ -14,6 +14,7 @@ commenting on.
 """
 from six import text_type
 
+from hypothesis import strategies
 from opaque_keys.edx.keys import AsideDefinitionKey, AsideUsageKey, DefinitionKey, UsageKey
 
 
@@ -47,6 +48,15 @@ class AsideDefinitionKeyV1(AsideDefinitionKey):  # pylint: disable=abstract-meth
     def __init__(self, definition_key, aside_type, deprecated=False):
         super(AsideDefinitionKeyV1, self).__init__(definition_key=definition_key, aside_type=aside_type,
                                                    deprecated=deprecated)
+
+    @classmethod
+    def field_strategy(cls, field):
+        if field == 'deprecated':
+            return strategies.just(False)
+        elif field == 'definition_key':
+            return DefinitionKey.type_strategy(blacklist=AsideDefinitionKey)
+        else:
+            return super(AsideDefinitionKeyV1, cls).field_strategy(field)
 
     @property
     def block_type(self):
@@ -107,6 +117,15 @@ class AsideUsageKeyV1(AsideUsageKey):  # pylint: disable=abstract-method
 
     def __init__(self, usage_key, aside_type, deprecated=False):
         super(AsideUsageKeyV1, self).__init__(usage_key=usage_key, aside_type=aside_type, deprecated=deprecated)
+
+    @classmethod
+    def field_strategy(cls, field):
+        if field == 'deprecated':
+            return strategies.just(False)
+        elif field == 'usage_key':
+            return UsageKey.type_strategy(blacklist=AsideUsageKey)
+        else:
+            return super(AsideUsageKeyV1, cls).field_strategy(field)
 
     @property
     def block_id(self):
