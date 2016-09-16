@@ -1,3 +1,10 @@
+# Unreleased
+
+# 0.4
+
+* Enforce the property that serialized keys are equal if and only if the parsed
+  keys are equal. In particular, this means that OpaqueKey parsing is now case-sensitive.
+
 # 0.3.4
 
 * Update the regular expression for a course key and locators which use course
